@@ -13,7 +13,7 @@ from numbers import Real
 import numpy as np
 
 
-class Compose(object):
+class Compose:
     """Apply an iterable of callable transforms in order, without a registry."""
 
     def __init__(self, transforms=None):
@@ -27,7 +27,7 @@ class Compose(object):
         return data_dict
 
 
-class RandomRotate(object):
+class RandomRotate:
     def __init__(self, angle=None, center=None, axis="z", always_apply=False, p=0.5):
         self.angle = [-1, 1] if angle is None else angle
         self.axis = axis
@@ -48,7 +48,7 @@ class RandomRotate(object):
             rot_t = np.array([[rot_cos, -rot_sin, 0], [rot_sin, rot_cos, 0], [0, 0, 1]])
         else:
             raise NotImplementedError
-        if "coord" in data_dict.keys():
+        if "coord" in data_dict:
             if self.center is None:
                 x_min, y_min, z_min = data_dict["coord"].min(axis=0)
                 x_max, y_max, z_max = data_dict["coord"].max(axis=0)
@@ -60,18 +60,18 @@ class RandomRotate(object):
             data_dict["coord"] -= center
             data_dict["coord"] = np.dot(data_dict["coord"], np.transpose(rot_t))
             data_dict["coord"] += center
-        if "normal" in data_dict.keys():
+        if "normal" in data_dict:
             data_dict["normal"] = np.dot(data_dict["normal"], np.transpose(rot_t))
         return data_dict
 
 
-class RandomScale(object):
+class RandomScale:
     def __init__(self, scale=None, anisotropic=False):
         self.scale = scale if scale is not None else [0.95, 1.05]
         self.anisotropic = anisotropic
 
     def __call__(self, data_dict):
-        if "coord" in data_dict.keys():
+        if "coord" in data_dict:
             scale = np.random.uniform(
                 self.scale[0], self.scale[1], 3 if self.anisotropic else 1
             )
@@ -79,34 +79,34 @@ class RandomScale(object):
         return data_dict
 
 
-class RandomFlip(object):
+class RandomFlip:
     def __init__(self, p=0.5):
         self.p = p
 
     def __call__(self, data_dict):
         # Applying random flip on X-axis
         if np.random.rand() < self.p:
-            if "coord" in data_dict.keys():
+            if "coord" in data_dict:
                 data_dict["coord"][:, 0] = -data_dict["coord"][:, 0]
-            if "normal" in data_dict.keys():
+            if "normal" in data_dict:
                 data_dict["normal"][:, 0] = -data_dict["normal"][:, 0]
         # Applying random flip on Y-axis
         if np.random.rand() < self.p:
-            if "coord" in data_dict.keys():
+            if "coord" in data_dict:
                 data_dict["coord"][:, 1] = -data_dict["coord"][:, 1]
-            if "normal" in data_dict.keys():
+            if "normal" in data_dict:
                 data_dict["normal"][:, 1] = -data_dict["normal"][:, 1]
         return data_dict
 
 
-class RandomJitter(object):
+class RandomJitter:
     def __init__(self, sigma=0.01, clip=0.05):
         assert clip > 0
         self.sigma = sigma
         self.clip = clip
 
     def __call__(self, data_dict):
-        if "coord" in data_dict.keys():
+        if "coord" in data_dict:
             jitter = np.clip(
                 self.sigma * np.random.randn(data_dict["coord"].shape[0], 3),
                 -self.clip,
@@ -116,7 +116,7 @@ class RandomJitter(object):
         return data_dict
 
 
-class GridSample(object):
+class GridSample:
     """Select one measured point per occupied voxel of one unbatched view.
 
     Quantization applies ``floor(coord / grid_size)`` and then
@@ -124,8 +124,7 @@ class GridSample(object):
     ``origin_coord`` are only indexed.
 
     The returned ``index`` addresses input rows. Optional ``inverse`` maps every
-    input row to its output voxel row. ``grid_coord`` is nonnegative int64,
-    ``grid_size`` is a scalar in meters, and ``offset`` is int64 ``[N_selected]``.
+    input row to its output voxel row.
     Listed per-point fields must be NumPy arrays with the input point count.
     Additional field names can be supplied through ``index_valid_keys``.
     """

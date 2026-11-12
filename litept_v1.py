@@ -620,6 +620,7 @@ class LitePT(PointModule):
         pre_norm=True,
         shuffle_orders=True,
         enc_mode=False,
+        mask_token=True,
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
@@ -649,8 +650,18 @@ class LitePT(PointModule):
         # activation layers
         act_layer = nn.GELU
 
+        # PreEmbedding (Compatibility with Sonata and masking view)
+        self.pre_embed = PointSequential(
+            nn.Linear(in_channels, enc_channels[0], bias=False),
+            ln_layer(enc_channels[0]),
+            act_layer(),
+        )
+        self.mask_token = (
+            nn.Parameter(torch.zeros(1, enc_channels[0])) if mask_token else None
+        )
+
         self.embedding = Embedding(
-            in_channels=in_channels,
+            in_channels=enc_channels[0],
             embed_channels=enc_channels[0],
             norm_layer=bn_layer,
             act_layer=act_layer,
@@ -763,12 +774,27 @@ class LitePT(PointModule):
         3. offset [batch_size]: separator of point clouds in batched data
            or/and
            batch [N]: batch index of each point
+        Optional mask [N] is boolean; True replaces that point's embedding
+        with the learned token before the first spatial convolution.
         """
         point = Point(data_dict)
         if self.enc_attn[0]:
             point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
         point.sparsify()
 
+        point = self.pre_embed(point)
+        if "mask" in point:
+            if self.mask_token is None:
+                raise ValueError("mask requires LitePT(mask_token=True)")
+            if point.mask.dtype != torch.bool or point.mask.shape != (len(point.feat),):
+                raise ValueError("mask must be a boolean tensor shaped (N,)")
+            point.feat = torch.where(
+                point.mask.unsqueeze(-1),
+                self.mask_token.to(point.feat.dtype),
+                point.feat,
+            )
+            # The convolution consumes sparse_conv_feat, not point.feat directly.
+            point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(point.feat)
         point = self.embedding(point)
         point = self.enc(point)
 

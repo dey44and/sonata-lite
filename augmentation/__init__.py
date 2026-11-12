@@ -1,5 +1,7 @@
-"""NumPy augmentations and Sonata-style views for single-keyframe LiDAR SSL."""
+"""NumPy augmentations and Sonata inspired views for LiDAR SSL."""
 
+from .masking import MaskedViewsGenerator
+from .schedule import MaskSchedule
 from .transforms import (
     Compose,
     GridSample,
@@ -13,8 +15,10 @@ from .views import MultiViewGenerator, NuScenesSSLViews
 __all__ = [
     "Compose",
     "GridSample",
+    "MaskedViewsGenerator",
     "MultiViewGenerator",
     "NuScenesSSLViews",
+    "MaskSchedule",
     "RandomFlip",
     "RandomJitter",
     "RandomRotate",

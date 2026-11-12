@@ -12,6 +12,7 @@ from collections.abc import Mapping
 
 import numpy as np
 
+from .masking import MaskedViewsGenerator
 from .transforms import (
     Compose,
     GridSample,
@@ -172,24 +173,22 @@ class MultiViewGenerator:
 
 
 class _PrepareLitePTView:
-    """Finalize one augmented crop without importing the model or PyTorch."""
+    """Finalize one augmented crop by producing the grid sampling (taking one random point for each 3D cell)."""
 
     def __init__(self, grid_size):
         self.sampler = GridSample(grid_size=grid_size)
 
     def __call__(self, point):
-        # Upstream rotation produces float64; establish the model's float32
-        # coordinate representation before quantizing, not after it.
+        # Set the data type of each numpy array to float32
         for key in ("coord", "origin_coord", "strength"):
             point[key] = np.ascontiguousarray(point[key], dtype=np.float32)
             if not np.isfinite(point[key]).all():
                 raise ValueError(f"{key} cannot be represented as finite float32")
+        # Apply grid sampling on the point cloud and pop out unrequired fields
         point = self.sampler(point)
         point.pop("index", None)
         point.pop("index_valid_keys", None)
-        point["grid_size"] = self.sampler.grid_size
         point["feat"] = np.concatenate((point["coord"], point["strength"]), axis=1)
-        point["offset"] = np.array([len(point["coord"])], dtype=np.int64)
         return point
 
 
@@ -205,25 +204,24 @@ def _nuscenes_geometry():
 
 
 class NuScenesSSLViews:
-    """Turn one reader item into two global and four local LitePT view dicts.
+    """Convert one scene into global, masked-global and local views.
 
-    The default 0.10 m grid is our experimental baseline; official LitePT uses
-    0.05 m. Sonata's shared sampling pass is retained before crop generation to
+    The default 0.10 m grid is our experimental baseline; official LitePT uses 0.05 m.
+    Sonata's shared sampling pass is retained before crop generation to
     reduce the influence of dense near-sensor returns on point-count crops.
-    Set presample=False to disable it. Final sampling after each view's geometry
-    is still required for unique sparse sites. Both passes use grid_size.
-    origin_coord is only indexed, never spatially transformed. feat is rebuilt
-    from current coord and strength.
+    Set presample=False to disable it.
 
-    Returns CPU NumPy arrays and a deep copy of metadata. Global views are
-    teacher inputs and templates for a future masked-student branch. Patch
-    masking, mask-token insertion, tensor conversion and batching belong to
-    later training stages. A coordinate-corrupted masked branch must undergo
-    its own final voxelization before the convolutional stem.
+    Returns CPU NumPy arrays and a deep copy of metadata. The two global views
+    are teacher inputs, and both of them are used to generate the student masked views.
+    The four local views remain student inputs.
+    Masking selects occupied patches from the global views.
+    It keeps geometry and raw features intact, with no extra masked coordinate jitter.
 
-    Set global_transform/local_transform to an empty tuple to disable geometry;
-    None selects the default recipe. Seed both random and numpy.random for
-    reproducibility, following the upstream transforms' random-number usage.
+    Set global_transform/local_transform to an empty tuple to disable geometry.
+    Seed both random and numpy.random for reproducibility,
+    following the upstream transforms' random-number usage.
+    Pass `mask_schedule=MaskSchedule(total_steps)` and call with `step=value`
+    to use Sonata-style progressive masking. Without a schedule, masking is fixed.
     """
 
     def __init__(
@@ -239,10 +237,16 @@ class NuScenesSSLViews:
         presample=True,
         global_transform=None,
         local_transform=None,
+        mask_size=0.4,
+        mask_ratio=0.3,
+        mask_schedule=None,
     ):
         if not isinstance(presample, bool):
             raise TypeError("presample must be a boolean")
         self.presampler = GridSample(grid_size) if presample else None
+        global_transform = _nuscenes_geometry() if global_transform is None else global_transform
+        local_transform = _nuscenes_geometry() if local_transform is None else local_transform
+        view_transform = (_PrepareLitePTView(grid_size),)
         self.generator = MultiViewGenerator(
             global_view_num=global_view_num,
             local_view_num=local_view_num,
@@ -250,16 +254,15 @@ class NuScenesSSLViews:
             local_view_scale=local_view_scale,
             max_size=max_size,
             min_points=min_points,
-            global_transform=_nuscenes_geometry()
-            if global_transform is None
-            else global_transform,
-            local_transform=_nuscenes_geometry()
-            if local_transform is None
-            else local_transform,
-            view_transform=(_PrepareLitePTView(grid_size),),
+            global_transform=global_transform,
+            local_transform=local_transform,
+            view_transform=view_transform,
+        )
+        self.mask_generator = MaskedViewsGenerator(
+            mask_size, mask_ratio, mask_schedule=mask_schedule
         )
 
-    def __call__(self, item):
+    def __call__(self, item, *, step=None):
         if not isinstance(item, Mapping):
             raise TypeError("reader item must be a mapping with point and meta")
         point = item["point"]
@@ -272,13 +275,16 @@ class NuScenesSSLViews:
                 raise ValueError(f"{key} must have shape (N, {width})")
             if not np.isfinite(array).all():
                 raise ValueError(f"{key} must contain finite values")
-        # Pass only base fields; stale raw feat/offset/grids cannot enter views.
+        # Keep only the necessary keys for views
         base = {key: point[key] for key in self.generator.view_keys if key in point}
         if self.presampler is not None:
             base = self.presampler(base)
-            # Sampling's grid describes the unaugmented full cloud. Each crop
-            # receives a fresh grid only after its independent geometry.
+            # Keep only the necessary keys for views
             base = {key: base[key] for key in self.generator.view_keys if key in base}
+        # Generate the global and local views
         result = self.generator(base)
+        # Apply the mask on the global views
+        result["masked_global_views"] = self.mask_generator(result["global_views"], step=step)
+        # Copy the metadata from the input
         result["meta"] = copy.deepcopy(item["meta"])
         return result
