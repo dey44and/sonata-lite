@@ -100,7 +100,8 @@ function selectView({ fit = false } = {}) {
     vertexColors: true,
   }));
   scene.add(cloud);
-  document.getElementById("view-info").textContent = `${view.name} · ${positions.length.toLocaleString()} points · ${frameSelect.options[frameSelect.selectedIndex].text}`;
+  const countUnit = view.grid_size != null ? "occupied voxels (one point each)" : "points";
+  document.getElementById("view-info").textContent = `${view.name} · ${positions.length.toLocaleString()} ${countUnit} · ${frameSelect.options[frameSelect.selectedIndex].text}`;
   const maskedCount = hasMask ? view.mask.filter(Boolean).length : 0;
   const scheduleInfo = view.mask_step != null && view.mask_total_steps != null
     ? ` · training step ${view.mask_step.toLocaleString()} / ${view.mask_total_steps.toLocaleString()}`
@@ -123,6 +124,7 @@ async function main() {
   views = payload.views;
   if (!Array.isArray(views) || views.length === 0) throw new Error("The server returned no point cloud views.");
   const original = views.find((view) => view.kind === "original") || views[0];
+  const comparison = views.find((view) => view.kind === "shared") || original;
   heightMin = Infinity;
   heightMax = -Infinity;
   for (const position of original.origin_coord) {
@@ -151,10 +153,11 @@ async function main() {
   views.forEach((view, index) => {
     const option = document.createElement("option");
     option.value = String(index);
-    option.textContent = view.name;
+    option.textContent = `${view.name} (${view.count.toLocaleString()})`;
     viewSelect.appendChild(option);
   });
-  viewSelect.value = String(views.indexOf(original));
+  viewSelect.value = String(views.indexOf(comparison));
+  frameSelect.value = "origin_coord";
   viewSelect.addEventListener("change", () => {
     try { selectView(); } catch (error) { fail(error); }
   });

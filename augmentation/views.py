@@ -93,7 +93,7 @@ class MultiViewGenerator:
         # I suppose the logic here is that we need the maximum between the minimum number of points and the size,
         # but at the same time the size should be smaller than the max_size.
         size = min(max_size, max(self.min_points, size))
-        # Keep only the first `size` points which are closest to the center
+        # Keep only the first size points which are closest to the center
         index = np.argsort(np.sum(np.square(coord - center), axis=-1))[:size]
         view = dict(index=index)
         for key in point.keys():
@@ -188,6 +188,7 @@ class _PrepareLitePTView:
         point = self.sampler(point)
         point.pop("index", None)
         point.pop("index_valid_keys", None)
+        # We get the features by concatenating the coords, and the intensity.
         point["feat"] = np.concatenate((point["coord"], point["strength"]), axis=1)
         return point
 
@@ -207,9 +208,9 @@ class NuScenesSSLViews:
     """Convert one scene into global, masked-global and local views.
 
     The default 0.10 m grid is our experimental baseline; official LitePT uses 0.05 m.
-    Sonata's shared sampling pass is retained before crop generation to
+    Shared sampling pass of Sonata is retained before crop generation to
     reduce the influence of dense near-sensor returns on point-count crops.
-    Set presample=False to disable it.
+    You can set presample=False to disable it.
 
     Returns CPU NumPy arrays and a deep copy of metadata. The two global views
     are teacher inputs, and both of them are used to generate the student masked views.
@@ -218,10 +219,11 @@ class NuScenesSSLViews:
     It keeps geometry and raw features intact, with no extra masked coordinate jitter.
 
     Set global_transform/local_transform to an empty tuple to disable geometry.
-    Seed both random and numpy.random for reproducibility,
-    following the upstream transforms' random-number usage.
+    Seed both random and numpy.random for reproducibility.
     Pass `mask_schedule=MaskSchedule(total_steps)` and call with `step=value`
-    to use Sonata-style progressive masking. Without a schedule, masking is fixed.
+    to use Sonata-style progressive masking. Without a schedule, masking is fixed to the provided values.
+    Pass `return_shared=True` to retain the exact input to crop generation for
+    visualization, including the initial voxel indices when presampling is enabled.
     """
 
     def __init__(
@@ -262,7 +264,7 @@ class NuScenesSSLViews:
             mask_size, mask_ratio, mask_schedule=mask_schedule
         )
 
-    def __call__(self, item, *, step=None):
+    def __call__(self, item, *, step=None, return_shared=False):
         if not isinstance(item, Mapping):
             raise TypeError("reader item must be a mapping with point and meta")
         point = item["point"]
@@ -279,12 +281,15 @@ class NuScenesSSLViews:
         base = {key: point[key] for key in self.generator.view_keys if key in point}
         if self.presampler is not None:
             base = self.presampler(base)
-            # Keep only the necessary keys for views
-            base = {key: base[key] for key in self.generator.view_keys if key in base}
+        shared_input = copy.deepcopy(base) if return_shared else None
+        # Keep only the necessary keys for views
+        base = {key: base[key] for key in self.generator.view_keys if key in base}
         # Generate the global and local views
         result = self.generator(base)
         # Apply the mask on the global views
         result["masked_global_views"] = self.mask_generator(result["global_views"], step=step)
         # Copy the metadata from the input
         result["meta"] = copy.deepcopy(item["meta"])
+        if return_shared:
+            result["shared_input"] = shared_input
         return result

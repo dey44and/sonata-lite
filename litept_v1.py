@@ -687,6 +687,7 @@ class LitePT(PointModule):
                         act_layer=act_layer,
                         re_serialization=enc_attn[s],
                         serialization_order=self.order,
+                        shuffle_orders=self.shuffle_orders
                     ),
                     name="down",
                 )
@@ -774,7 +775,7 @@ class LitePT(PointModule):
         3. offset [batch_size]: separator of point clouds in batched data
            or/and
            batch [N]: batch index of each point
-        Optional mask [N] is boolean; True replaces that point's embedding
+        4. Optional mask [N] is boolean. A true value replaces that point's embedding
         with the learned token before the first spatial convolution.
         """
         point = Point(data_dict)
@@ -786,8 +787,6 @@ class LitePT(PointModule):
         if "mask" in point:
             if self.mask_token is None:
                 raise ValueError("mask requires LitePT(mask_token=True)")
-            if point.mask.dtype != torch.bool or point.mask.shape != (len(point.feat),):
-                raise ValueError("mask must be a boolean tensor shaped (N,)")
             point.feat = torch.where(
                 point.mask.unsqueeze(-1),
                 self.mask_token.to(point.feat.dtype),

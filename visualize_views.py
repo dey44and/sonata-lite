@@ -2,6 +2,7 @@
 
 Run ``python visualize_views.py --help`` for the single-keyframe CLI, or call
 ``serve_views(views, original=item["point"])`` with an existing augmentation result.
+Generate with ``return_shared=True`` to include the exact sampled crop input.
 """
 
 from __future__ import annotations
@@ -39,8 +40,9 @@ STATIC_FILES = {
 def make_payload(views: dict, *, original: dict | None = None, seed=None) -> dict:
     """Serialize actual view points, preserving both coordinate representations.
 
-    ``original`` is the raw reader's point dictionary. No display subsampling,
-    regeneration, or modification of the supplied views takes place.
+    ``original`` is the raw reader's point dictionary. ``shared_input``, when
+    present in views, is the actual input used for crop generation. No display
+    subsampling, regeneration, or modification of supplied points takes place.
     """
     entries = []
 
@@ -53,6 +55,8 @@ def make_payload(views: dict, *, original: dict | None = None, seed=None) -> dic
             "origin_coord": point["origin_coord"].tolist(),
             "strength": point["strength"].reshape(-1).tolist(),
         }
+        if "grid_size" in point:
+            entry["grid_size"] = float(point["grid_size"])
         if kind == "masked_global":
             entry["mask"] = point["mask"].tolist()
             entry["mask_size"] = float(point["mask_size"])
@@ -63,7 +67,15 @@ def make_payload(views: dict, *, original: dict | None = None, seed=None) -> dic
         entries.append(entry)
 
     if original is not None:
-        append_view("Original keyframe", "original", original)
+        append_view("Original keyframe (raw)", "original", original)
+    if "shared_input" in views:
+        shared = views["shared_input"]
+        name = (
+            f"Shared keyframe ({shared['grid_size']:g} m voxel sampled)"
+            if "grid_size" in shared
+            else "Shared keyframe (crop input, presampling disabled)"
+        )
+        append_view(name, "shared", shared)
     for index, point in enumerate(views["global_views"]):
         suffix = " (principal)" if index == 0 else ""
         append_view(f"Global {index}{suffix}", "global", point)
@@ -225,9 +237,12 @@ def main(argv=None) -> None:
         np.random.seed(args.seed)
         item = reader.read(token)
         if args.total_steps is not None:
-            views = augment(item, step=0 if args.step is None else args.step)
+            views = augment(
+                item, step=0 if args.step is None else args.step, return_shared=True
+            )
         else:
-            views = augment(item)
+            views = augment(item, return_shared=True)
+        print(f"shared_input: {len(views['shared_input']['coord'])}", flush=True)
         for kind in ("global_views", "masked_global_views", "local_views"):
             print(f"{kind}: {[len(view['coord']) for view in views[kind]]}", flush=True)
         serve_views(

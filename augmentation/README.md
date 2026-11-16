@@ -1,7 +1,7 @@
 # Sonata-style LiDAR view augmentation
 
-This NumPy package adapts published Sonata/Pointcept code for the raw
-single-keyframe nuScenes reader and LitePT's sparse-convolution input.
+This NumPy package adapts Sonata code for visualizing a single nuScenes frame, adapting
+the input for LitePT backbone.
 
 ```python
 import random
@@ -30,8 +30,9 @@ student_local = views["local_views"]   # Four independently augmented crops.
 meta = views["meta"]
 ```
 
-The input item is unchanged and each view contains independent arrays. Calling the augmentation samples new
-random crops and transforms each time.
+For inspection, `augment(item, return_shared=True)` also returns `shared_input`,
+an independent copy of the exact cloud used for crop generation. With presampling
+enabled it includes the initial voxel coordinates and grid size.
 
 ### Processing order
 
@@ -41,7 +42,7 @@ random crops and transforms each time.
 2. Generate two global and four local crops using Sonata's crop rule.
    Global point-count fractions are 40–100% and local fractions are 10–40% of
    `min(number_of_points_after_shared_sampling, max_size)`, where `max_size=65536`.
-3. Independently augment each crop using the official LitePT nuScenes recipe:
+3. Independently augment each crop using the official LitePT nuScenes rules:
    yaw in `[-pi, pi]` about the sensor origin with probability 0.5, isotropic
    scaling in `[0.9, 1.1]`, X/Y flips with probability 0.5 each, and Gaussian
    coordinate jitter with sigma 0.005 m clipped to ±0.02 m.
