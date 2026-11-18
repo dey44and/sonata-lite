@@ -74,8 +74,8 @@ class SSLTrainer:
         self.lr_schedule = None
         if schedule_type == "OneCycleLR":
             # Construction installs step-zero LR and Adam beta1. The scheduler
-            # advances after each consumed batch, including AMP/no-match skips,
-            # matching this trainer's data/curriculum clock (global_step).
+            # advances only after successful optimizer updates, matching the
+            # official trainer's AMP-overflow guard. Data curricula use step.
             self.lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 self.optimizer,
                 max_lr=[group["lr"] for group in self.optimizer.param_groups],
@@ -116,6 +116,7 @@ class SSLTrainer:
         )
         self.global_step = 0
         self.optimizer_steps = 0
+        self.lr_scheduler_steps = 0
         self.wandb_run_id = None
         self.output_dir = Path(config.get("output_dir", "runs/nuscenes_ssl_litept_s"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -195,30 +196,25 @@ class SSLTrainer:
         else:
             grad_norm = loss.new_zeros(())
         self.global_step = step + 1
-        if self.lr_scheduler is not None:
-            with warnings.catch_warnings():
-                if not stepped:
-                    # A skipped first update intentionally advances the batch
-                    # clock; silence only PyTorch's first-step ordering warning.
-                    warnings.filterwarnings(
-                        "ignore", message=r"Detected call of `lr_scheduler.step\(\)` before `optimizer.step\(\)`",
-                        category=UserWarning,
-                    )
-                self.lr_scheduler.step()
+        if self.lr_scheduler is not None and stepped:
+            self.lr_scheduler.step()
+            self.lr_scheduler_steps += 1
         metrics = {key: float(value.detach()) if isinstance(value, torch.Tensor)
                    else float(value) for key, value in result.items()}
         metrics.update(step=step, lr=lr, teacher_temp=temperature, ema_momentum=momentum,
                        lr_min=min(learning_rates), lr_max=max(learning_rates),
                        weight_decay=weight_decay, adam_beta1=beta1,
                        grad_norm=float(grad_norm), optimizer_step=stepped,
-                       optimizer_steps=self.optimizer_steps)
+                       optimizer_steps=self.optimizer_steps,
+                       lr_scheduler_steps=self.lr_scheduler_steps)
         return metrics
 
     def save_checkpoint(self, path=None):
         path = Path(path) if path is not None else self.output_dir / "last.pt"
         state = {
-            "format_version": 2, "config": self.config,
+            "format_version": 3, "config": self.config,
             "global_step": self.global_step, "optimizer_steps": self.optimizer_steps,
+            "lr_scheduler_steps": self.lr_scheduler_steps,
             "wandb": {"run_id": self.wandb_run_id},
             "model": self.model.state_dict(), "optimizer": self.optimizer.state_dict(),
             "scaler": self.scaler.state_dict(),
@@ -245,14 +241,32 @@ class SSLTrainer:
                              ("gradient_clip", 3.0)):
             if state["config"].get(key, default) != self.config.get(key, default):
                 raise ValueError(f"Resume configuration differs for {key}")
+        scheduler_state = state.get("lr_scheduler")
+        scheduler_steps = 0
+        if self.lr_scheduler is not None:
+            if scheduler_state is None:
+                raise ValueError("OneCycleLR checkpoint is missing lr_scheduler state")
+            legacy_clock = "lr_scheduler_steps" not in state
+            if legacy_clock and state.get("format_version", 1) >= 3:
+                raise ValueError("OneCycleLR checkpoint is missing lr_scheduler_steps")
+            # Legacy format 2 stepped on consumed batches. Preserve its saved
+            # LR/beta1 position rather than rewinding previous optimizer work.
+            scheduler_steps = state["global_step"] if legacy_clock else state["lr_scheduler_steps"]
+            if (not isinstance(scheduler_steps, int)
+                    or not 0 <= state["optimizer_steps"] <= scheduler_steps <= state["global_step"] <= self.total_steps
+                    or scheduler_state.get("last_epoch") != scheduler_steps):
+                raise ValueError("OneCycleLR state differs from the checkpoint's scheduler-step counter")
+            if legacy_clock and scheduler_steps > state["optimizer_steps"]:
+                warnings.warn(
+                    "Legacy checkpoint advanced OneCycleLR on skipped updates; "
+                    "preserving its saved LR position. Future skipped updates "
+                    "will not advance the scheduler.", RuntimeWarning,
+                )
         self.model.load_state_dict(state["model"])
         self.optimizer.load_state_dict(state["optimizer"])
         if self.lr_scheduler is not None:
-            if state.get("lr_scheduler") is None:
-                raise ValueError("OneCycleLR checkpoint is missing lr_scheduler state")
-            self.lr_scheduler.load_state_dict(state["lr_scheduler"])
-            if self.lr_scheduler.last_epoch != state["global_step"]:
-                raise ValueError("OneCycleLR state differs from the consumed-batch clock")
+            self.lr_scheduler.load_state_dict(scheduler_state)
+        self.lr_scheduler_steps = scheduler_steps
         self.scaler.load_state_dict(state["scaler"])
         self.global_step = state["global_step"]
         self.optimizer_steps = state["optimizer_steps"]

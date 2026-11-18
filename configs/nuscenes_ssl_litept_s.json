@@ -1,23 +1,23 @@
 {
   "seed": 42,
   "device": "cuda",
-  "total_steps": 10000,
-  "batch_size": 2,
-  "num_workers": 4,
+  "total_steps": 351600,
+  "batch_size": 16,
+  "num_workers": 8,
   "amp": "float16",
   "gradient_clip": 3.0,
-  "output_dir": "runs/nuscenes_ssl_litept_s",
+  "output_dir": "/runs/sonata_lite",
   "log_every": 10,
-  "save_every": 1000,
+  "save_every": 250,
   "wandb": {
-    "enabled": false,
+    "enabled": true,
     "project": "sonata-lite",
     "mode": "online",
     "log_every": 10
   },
   "dataset": {
     "type": "NuScenesSSLDataset",
-    "dataroot": "~/Datasets/nuScenes",
+    "dataroot": "~/nuScenes",
     "version": "v1.0-trainval",
     "split": "train",
     "seed": 42,
@@ -29,7 +29,7 @@
       "max_size": 16384,
       "mask_schedule": {
         "type": "MaskSchedule",
-        "total_steps": 10000,
+        "total_steps": 351600,
         "mask_size_start": 0.1,
         "mask_size_base": 0.4,
         "mask_ratio_start": 0.3,
@@ -61,10 +61,36 @@
     "mask_loss_weight": 0.25,
     "roll_mask_loss_weight": 0.25,
     "unmask_loss_weight": 0.5,
-    "teacher_custom": {"drop_path": 0.0}
+    "teacher_custom": {
+      "drop_path": 0.0
+    }
   },
-  "optimizer": {"type": "AdamW", "lr": 0.0001, "weight_decay": 0.04},
-  "lr_schedule": {"start_value": 0.000001, "final_value": 0.000001, "warmup_ratio": 0.05},
-  "teacher_temperature": {"start_value": 0.04, "base_value": 0.07, "warmup_ratio": 0.05},
-  "teacher_momentum": {"base_value": 0.994, "final_value": 1.0}
+  "optimizer": {
+    "type": "AdamW",
+    "lr": 0.0006666666666666666,
+    "weight_decay": 0.04,
+    "layer_decay": 0.9
+  },
+  "lr_schedule": {
+    "type": "OneCycleLR",
+    "pct_start": 0.05,
+    "anneal_strategy": "cos",
+    "div_factor": 10.0,
+    "final_div_factor": 1000.0
+  },
+  "teacher_temperature": {
+    "start_value": 0.04,
+    "base_value": 0.07,
+    "warmup_ratio": 0.05
+  },
+  "teacher_momentum": {
+    "base_value": 0.994,
+    "final_value": 1.0
+  },
+  "prefetch_factor": 1,
+  "drop_last": true,
+  "weight_decay_schedule": {
+    "final_value": 0.2,
+    "warmup_ratio": 0.0
+  }
 }
