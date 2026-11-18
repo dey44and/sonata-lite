@@ -230,6 +230,8 @@ class Registry:
             else:
                 # goto root
                 parent = self.parent
+                if parent is None:
+                    return None
                 while parent.parent is not None:
                     parent = parent.parent
                 return parent.get(key)
@@ -338,3 +340,10 @@ class Registry:
             return cls
 
         return _register
+
+
+# Project registries. Explicit scopes keep imports independent of the caller.
+MODELS = Registry("models", scope="models")
+DATASETS = Registry("datasets", scope="datasets")
+TRANSFORMS = Registry("transforms", scope="transforms")
+TRAINERS = Registry("trainers", scope="trainers")

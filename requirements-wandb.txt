@@ -1,0 +1,2 @@
+# Optional experiment tracking; install after requirements-cu121.txt.
+wandb==0.31.0

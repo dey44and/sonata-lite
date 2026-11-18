@@ -22,7 +22,7 @@ def read_lidar_bin(path: str | Path) -> np.ndarray:
     # Compute the number of bytes per row and the size of the file
     record_bytes = 5 * np.dtype(np.float32).itemsize
     size = path.stat().st_size
-    # Check if the file is empty or if the file does not have the requested format
+    # Check if the file is empty or if the file does not have the requested format (rows of 5 elements)
     if size == 0:
         raise ValueError(f"LiDAR scan is empty: {path}")
     if size % record_bytes:
@@ -51,20 +51,15 @@ class _Keyframe:
 class NuScenesKeyframeReader:
     """Index and read one LIDAR_TOP keyframe for a nuScenes sample token.
 
-    Construct once and reuse it. Metadata is streamed and only a small keyframe
-    index is retained; scan files are opened on demand. All samples in the
-    selected metadata version are indexed, without train/validation filtering.
-
     ``read`` returns ``{"point": ..., "meta": ...}``. Point fields are CPU
     NumPy arrays: coord/origin_coord ``(N, 3)``, strength ``(N, 1)``, feat
     ``(N, 4)`` (all float32), and offset ``[N]`` (int64). Intensity is divided
-    by 255 exactly once. Ring indices are excluded from the model features.
+    by 255 and ring indices are excluded from the model features.
 
     These are RAW scans: there is no cropping, augmentation, sweep aggregation,
-    grid sampling, or tensor conversion. They are not ready for a LitePT forward
-    until grid sampling has selected representatives and generated grid_coord.
-    Future spatial transforms must rebuild feat from the transformed coord and
-    strength, and preserve the corresponding unaugmented origin_coord rows.
+    grid sampling, or tensor conversion. Future spatial transforms must rebuild
+    feat from the transformed coord and strength, and preserve the corresponding
+    unaugmented origin_coord rows.
     """
 
     def __init__(
@@ -126,9 +121,6 @@ class NuScenesKeyframeReader:
 
         if not self._keyframes:
             raise ValueError(f"No LIDAR_TOP keyframes found in {metadata_dir}")
-        self.sample_tokens = tuple(
-            token for token in sample_scenes if token in self._keyframes
-        )
 
     def __len__(self) -> int:
         return len(self._keyframes)

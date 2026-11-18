@@ -10,7 +10,9 @@ Adaptation from Sonata v1m1 Base
 from packaging import version
 import torch
 import torch.nn as nn
+from registry import MODELS
 
+@MODELS.register_module()
 class OnlineCluster(nn.Module):
     """
     The implementation of online clustering layer for self-distillation.

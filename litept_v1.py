@@ -11,7 +11,24 @@ import torch
 import torch.nn as nn
 import spconv.pytorch as spconv
 import torch_scatter
-from timm.layers import DropPath
+from registry import MODELS
+
+try:
+    from timm.layers import DropPath
+except ImportError:
+    class DropPath(nn.Module):
+        """Per-row stochastic depth, matching timm's default scaling."""
+
+        def __init__(self, drop_prob=0.0):
+            super().__init__()
+            self.drop_prob = drop_prob
+
+        def forward(self, x):
+            if not self.training or self.drop_prob == 0:
+                return x
+            keep = 1 - self.drop_prob
+            shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+            return x * x.new_empty(shape).bernoulli_(keep) / keep
 
 try:
     import flash_attn
@@ -137,6 +154,7 @@ class PointROPEAttention(PointModule):
         attn_drop=0.0,
         proj_drop=0.0,
         order_index=0,
+        enable_flash=True,
     ):
         super().__init__()
         assert channels % num_heads == 0
@@ -144,6 +162,7 @@ class PointROPEAttention(PointModule):
         self.num_heads = num_heads
         self.scale = qk_scale or (channels // num_heads) ** -0.5
         self.order_index = order_index
+        self.enable_flash = enable_flash
 
         self.patch_size = patch_size
         self.attn_drop = attn_drop
@@ -232,7 +251,9 @@ class PointROPEAttention(PointModule):
         pos = point.grid_coord[order]  # [N, 3]
         pos = pos.reshape(-1, 3).unsqueeze(0)
 
-        q, k, v = qkv.half().chunk(3, dim=-1)
+        use_flash = self.enable_flash and flash_attn is not None and qkv.is_cuda
+        attention_input = qkv.half() if use_flash else qkv
+        q, k, v = attention_input.chunk(3, dim=-1)
         q = q.reshape(-1, H, C // H).transpose(0, 1)[None]  # [1, H, N, head_dim]
         k = k.reshape(-1, H, C // H).transpose(0, 1)[None]  # [1, H, N, head_dim]
 
@@ -250,19 +271,30 @@ class PointROPEAttention(PointModule):
             dim=1,
         )  # [N, 3, H, head_dim]
 
-        if flash_attn is None:
-            raise ImportError(
-                "LitePT forward requires flash_attn, but it is not installed. "
-                "Please install flash_attn to run LitePT attention."
-            )
-
-        feat = flash_attn.flash_attn_varlen_qkvpacked_func(
-            qkv_rotated,
-            cu_seqlens,
-            max_seqlen=self.patch_size,
-            dropout_p=self.attn_drop if self.training else 0,
-            softmax_scale=self.scale,
-        ).reshape(-1, C)
+        if use_flash:
+            feat = flash_attn.flash_attn_varlen_qkvpacked_func(
+                qkv_rotated,
+                cu_seqlens,
+                max_seqlen=self.patch_size,
+                dropout_p=self.attn_drop if self.training else 0,
+                softmax_scale=self.scale,
+            ).reshape(-1, C)
+        else:
+            # Same serialized windows and PointROPE; no cross-window attention.
+            # Reference: PyTorch scaled_dot_product_attention documentation.
+            bounds = cu_seqlens.tolist()
+            windows = []
+            for begin, end in zip(bounds[:-1], bounds[1:]):
+                query, key, value = qkv_rotated[begin:end].unbind(dim=1)
+                result = nn.functional.scaled_dot_product_attention(
+                    query.transpose(0, 1).float(),
+                    key.transpose(0, 1).float(),
+                    value.transpose(0, 1).float(),
+                    dropout_p=self.attn_drop if self.training else 0.0,
+                    scale=self.scale,
+                )
+                windows.append(result.transpose(0, 1).reshape(-1, C))
+            feat = torch.cat(windows, dim=0)
 
         feat = feat.to(qkv.dtype)
         feat = feat[inverse]
@@ -320,6 +352,7 @@ class Block(PointModule):
         enable_conv=True,
         enable_attn=True,
         rope_freq=100.0,
+        enable_flash=True,
     ):
         super().__init__()
         self.channels = channels
@@ -357,6 +390,7 @@ class Block(PointModule):
                 attn_drop=attn_drop,
                 proj_drop=proj_drop,
                 order_index=order_index,
+                enable_flash=enable_flash,
             )
             self.norm2 = PointSequential(norm_layer(channels))
             self.mlp = PointSequential(
@@ -590,7 +624,7 @@ class Embedding(PointModule):
         return point
 
 
-#@MODELS.register_module("LitePT-v1")
+@MODELS.register_module(name=["LitePT", "LitePT-v1"])
 class LitePT(PointModule):
     def __init__(
         self,
@@ -621,6 +655,7 @@ class LitePT(PointModule):
         shuffle_orders=True,
         enc_mode=False,
         mask_token=True,
+        enable_flash=True,
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
@@ -711,6 +746,7 @@ class LitePT(PointModule):
                         enable_conv=enc_conv[s],
                         enable_attn=enc_attn[s],
                         rope_freq=enc_rope_freq[s],
+                        enable_flash=enable_flash,
                     ),
                     name=f"block{i}",
                 )
@@ -760,6 +796,7 @@ class LitePT(PointModule):
                             enable_conv=dec_conv[s],
                             enable_attn=dec_attn[s],
                             rope_freq=dec_rope_freq[s],
+                            enable_flash=enable_flash,
                         ),
                         name=f"block{i}",
                     )

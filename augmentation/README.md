@@ -146,11 +146,11 @@ The current wrapper selects across the two globals of **one keyframe**.
 Official Sonata selects after packing the globals of a training batch. The
 algorithm is the same in our case.
 
-The caller supplies the intended training step, this implies that every item belonging to one
-training batch must use the same step. Data-loader prefetching does not track
-the optimizer's live step automatically. A future loader must attach the
-intended step to queued work, or generate masks in the training process after
-batching. Trainer / data-loader integration is not included yet.
+The caller supplies the intended training step, so every item in one batch
+uses the same step. `trainer.data.StepBatchSampler` attaches that step to
+queued sample requests, including when workers prefetch or training resumes.
+`NuScenesSSLDataset` generates the views and `collate_ssl_views` packs them as
+Torch tensors before GPU transfer. See the root README's SSL training section.
 
 Our `litept_v1.py` now uses:
 
@@ -173,8 +173,7 @@ Our `litept_v1.py` now uses:
 | `NuScenesSSLViews` | Project-specific adapter for reader items, intensity features, default geometric recipe, final LitePT fields and masked global copies. |
 
 Quantization uses `floor(coord.astype(float64) / grid_size)`, followed by
-subtraction of the minimum **integer** cell. Continuous coordinates are preserved,
-not snapped to voxel centers or averaged. Float64 division avoids float32
+subtraction of the minimum **integer** cell. Float64 division avoids float32
 rounding across voxel boundaries, and the final coordinates are cast to float32 before
 this calculation.
 

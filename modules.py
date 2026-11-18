@@ -1,6 +1,8 @@
 import sys
+import torch
 import torch.nn as nn
 import spconv.pytorch as spconv
+from spconv.pytorch.conv import SparseConvolution
 
 try:
     import ocnn
@@ -9,6 +11,31 @@ except ImportError:
 
 from collections import OrderedDict
 from utils.structure import Point
+
+
+def _forward_spconv(module, sparse):
+    if (
+        isinstance(module, SparseConvolution)
+        and not module.training
+        and sparse.features.is_cuda
+        and torch.is_autocast_enabled()
+    ):
+        # SpConv 2.3.8's eval implicit-GEMM path bypasses its training AMP casts:
+        # https://github.com/traveller59/spconv/blob/v2.3.8/spconv/pytorch/conv.py
+        # Cast only this call, preserving FP32 master parameters for teacher EMA.
+        dtype = (
+            torch.get_autocast_dtype("cuda")
+            if hasattr(torch, "get_autocast_dtype")
+            else torch.get_autocast_gpu_dtype()
+        )
+        sparse = sparse.replace_feature(sparse.features.to(dtype))
+        parameters = {
+            name: parameter.to(dtype)
+            for name, parameter in module.named_parameters(recurse=False)
+        }
+        with torch.autocast(device_type="cuda", enabled=False):
+            return torch.func.functional_call(module, parameters, (sparse,))
+    return module(sparse)
 
 
 def is_ocnn_module(module):
@@ -82,10 +109,12 @@ class PointSequential(PointModule):
             # Spconv module
             elif spconv.modules.is_spconv_module(module):
                 if isinstance(input, Point):
-                    input.sparse_conv_feat = module(input.sparse_conv_feat)
+                    input.sparse_conv_feat = _forward_spconv(
+                        module, input.sparse_conv_feat
+                    )
                     input.feat = input.sparse_conv_feat.features
                 else:
-                    input = module(input)
+                    input = _forward_spconv(module, input)
             elif is_ocnn_module(module):
                 if isinstance(input, Point):
                     input.octree.features[-1] = module(
