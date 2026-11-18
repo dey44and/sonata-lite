@@ -5,7 +5,6 @@ Author: Yuanwen Yue (yuayue@ethz.ch)
 Please cite our work if the code is helpful to you.
 """
 
-from functools import partial
 from addict import Dict
 import torch
 import torch.nn as nn
@@ -678,8 +677,7 @@ class LitePT(PointModule):
         assert self.enc_mode or self.num_stages == len(dec_num_head) + 1
         assert self.enc_mode or self.num_stages == len(dec_patch_size) + 1
 
-        # norm layers
-        bn_layer = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
+        # Use per-point normalization throughout, as in Sonata's PTv3 backbone.
         ln_layer = nn.LayerNorm
 
         # activation layers
@@ -698,7 +696,7 @@ class LitePT(PointModule):
         self.embedding = Embedding(
             in_channels=enc_channels[0],
             embed_channels=enc_channels[0],
-            norm_layer=bn_layer,
+            norm_layer=ln_layer,
             act_layer=act_layer,
         )
 
@@ -718,7 +716,7 @@ class LitePT(PointModule):
                         in_channels=enc_channels[s - 1],
                         out_channels=enc_channels[s],
                         stride=stride[s - 1],
-                        norm_layer=bn_layer,
+                        norm_layer=ln_layer,
                         act_layer=act_layer,
                         re_serialization=enc_attn[s],
                         serialization_order=self.order,
@@ -771,7 +769,7 @@ class LitePT(PointModule):
                         in_channels=dec_channels[s + 1],
                         skip_channels=enc_channels[s],
                         out_channels=dec_channels[s],
-                        norm_layer=bn_layer,
+                        norm_layer=ln_layer,
                         act_layer=act_layer,
                     ),
                     name="up",
