@@ -2,8 +2,8 @@
 
 Adapted from the official Sonata model at Pointcept commit
 96e109d103418a5daaa375c50e1665b9f04f4a4b. Our CPU augmentation pipeline
-already produces masked global views. Teacher BatchNorm uses EMA running
-statistics in evaluation mode, an explicit adaptation for LitePT's BN layers.
+already produces masked global views. LitePT uses LayerNorm throughout, and
+the teacher stays in evaluation mode to disable dropout and stochastic depth.
 """
 
 from collections.abc import Mapping
@@ -128,15 +128,14 @@ class SSLModel(nn.Module):
 
     def train(self, mode=True):
         super().train(mode)
-        # Unlike PTv3's LayerNorm-only backbone, LitePT has BatchNorm. Running
-        # it in eval mode removes teacher dropout and independent BN updates;
-        # update_teacher below transfers the student's running statistics.
+        # Keep teacher dropout and stochastic depth disabled when the student
+        # enters training mode. LitePT's LayerNorm has no running statistics.
         self.teacher.eval()
         return self
 
     @torch.no_grad()
     def update_teacher(self, momentum):
-        """EMA after a successful optimizer step, including BN running state."""
+        """EMA after a successful optimizer step, including any floating buffers."""
         if not 0 <= momentum <= 1:
             raise ValueError("EMA momentum must be between zero and one")
         student_parameters = dict(self.student.named_parameters())

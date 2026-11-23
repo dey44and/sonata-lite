@@ -1,7 +1,7 @@
 """Single-GPU Sonata-style pretraining, with resumable planned data steps.
 
 Reference orchestration: Pointcept Sonata v1m1 (commit 96e109d).
-The optimizer, checkpoint format, and LitePT BN-buffer EMA are project adapters.
+The optimizer, checkpoint format, and generic buffer EMA are project adapters.
 """
 
 import copy

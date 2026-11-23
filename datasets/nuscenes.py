@@ -121,6 +121,7 @@ class NuScenesKeyframeReader:
 
         if not self._keyframes:
             raise ValueError(f"No LIDAR_TOP keyframes found in {metadata_dir}")
+        self.sample_tokens = tuple(token for token in sample_scenes if token in self._keyframes)
 
     def __len__(self) -> int:
         return len(self._keyframes)

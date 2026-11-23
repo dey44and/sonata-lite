@@ -190,12 +190,18 @@ entire batch has no matches, both optimizer and EMA updates are skipped.
 Sinkhorn supports distributed reductions, but this trainer does not yet wrap
 the networks/data sampler for DDP.
 
-The teacher is frozen and kept in evaluation mode. EMA updates all parameters
-and floating buffers after successful optimizer updates; integer BN counters
-are copied. Updating BN state is a LitePT-specific adaptation because the
-reference Sonata PTv3 backbone uses LayerNorm. AMP overflow skips EMA as well
+The teacher is frozen and kept in evaluation mode to disable dropout and
+stochastic depth. LitePT uses LayerNorm throughout, as does the reference
+Sonata PTv3 backbone; there are no BatchNorm running statistics. EMA updates all
+parameters, including LayerNorm's scale and bias, after successful optimizer
+updates. Generic buffer handling averages floating buffers and copies integer
+buffers if a custom backbone contains them. AMP overflow skips EMA as well
 as the optimizer update. `global_step` counts consumed batches;
 `optimizer_steps` separately counts successful updates.
+
+The LayerNorm backbone requires a fresh training run when switching from the
+earlier BatchNorm version. Its old running-statistic buffers prevent strict
+checkpoint loading, and the normalization behavior has changed.
 
 Optional Weights & Biases logging records these metrics and the effective
 configuration, with checkpointed run IDs and explicit training-step axes.
@@ -210,8 +216,8 @@ GEMM path, however, bypasses the autocast handling used during training. A teach
 can consequently present FP16 features to FP32 convolution weights. The
 `PointSequential` adapter casts the sparse features and temporary convolution
 parameter values together for each evaluation call using
-`torch.func.functional_call`. Stored parameters remain FP32 for EMA, and teacher
-BatchNorm remains in evaluation mode. `backbone_amp=false` remains available for
+`torch.func.functional_call`. Stored parameters remain FP32 for EMA, and the
+teacher remains in evaluation mode. `backbone_amp=false` remains available for
 experiments with an FP32 backbone. The verified native recipe uses FP16; BF16
 sparse convolutions are not covered by this verification.
 
